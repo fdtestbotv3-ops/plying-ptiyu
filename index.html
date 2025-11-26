@@ -21,10 +21,15 @@
     let DPR = 1;
     let W = canvas.width;
     let H = canvas.height;
+    function viewportSize(){
+      const vv = window.visualViewport;
+      const w = Math.floor((vv && vv.width) || window.innerWidth || document.documentElement.clientWidth || 480);
+      const h = Math.floor((vv && vv.height) || window.innerHeight || document.documentElement.clientHeight || 640);
+      return { w: Math.max(320, w), h: Math.max(320, h) };
+    }
     function resize(){
       DPR = Math.max(1, Math.round(window.devicePixelRatio || 1));
-      const cssW = Math.max(320, Math.floor(window.innerWidth || 480));
-      const cssH = Math.max(320, Math.floor(window.innerHeight || 640));
+      const { w: cssW, h: cssH } = viewportSize();
       canvas.style.width = cssW + 'px';
       canvas.style.height = cssH + 'px';
       canvas.width = Math.floor(cssW * DPR);
@@ -37,6 +42,8 @@
     }
     resize();
     window.addEventListener('resize', resize, { passive: true });
+    window.addEventListener('orientationchange', () => setTimeout(resize, 100), { passive: true });
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', resize, { passive: true });
     const GROUND = 90;
     const PIPE_W = 64;
     const GAP_BASE = 150;

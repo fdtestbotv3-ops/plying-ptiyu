@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Flying Pritu</title>
   <style>
     html, body { height: 100%; }
@@ -18,10 +18,13 @@
   <script>
     const canvas = document.getElementById('game');
     const ctx = canvas.getContext('2d');
-    const DPR = Math.max(1, Math.round(window.devicePixelRatio || 1));
-    (function setupHiDPI(){
-      const cssW = canvas.width;
-      const cssH = canvas.height;
+    let DPR = 1;
+    let W = canvas.width;
+    let H = canvas.height;
+    function resize(){
+      DPR = Math.max(1, Math.round(window.devicePixelRatio || 1));
+      const cssW = Math.max(320, Math.floor(window.innerWidth || 480));
+      const cssH = Math.max(320, Math.floor(window.innerHeight || 640));
       canvas.style.width = cssW + 'px';
       canvas.style.height = cssH + 'px';
       canvas.width = Math.floor(cssW * DPR);
@@ -29,10 +32,11 @@
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-    })();
-
-    const W = canvas.width;
-    const H = canvas.height;
+      W = canvas.width;
+      H = canvas.height;
+    }
+    resize();
+    window.addEventListener('resize', resize, { passive: true });
     const GROUND = 90;
     const PIPE_W = 64;
     const GAP_BASE = 150;

@@ -32,8 +32,8 @@
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      W = canvas.width;
-      H = canvas.height;
+      W = cssW;
+      H = cssH;
     }
     resize();
     window.addEventListener('resize', resize, { passive: true });

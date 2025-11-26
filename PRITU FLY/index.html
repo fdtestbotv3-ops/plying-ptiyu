@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flying Pritu</title>
+  <style>
+    html, body { height: 100%; }
+    body { margin: 0; display: grid; place-items: center; background: linear-gradient(180deg,#4fc3f7,#e1f5fe); font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    #game { box-shadow: 0 8px 24px rgba(0,0,0,0.2); border-radius: 12px; background: #87ceeb; }
+    .hint { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); color: #044; font-size: 14px; opacity: .7; }
+  </style>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <canvas id="game" width="480" height="640"></canvas>
+  <div class="hint">Click/Tap/Press Space to flap. Enter to restart.</div>
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const DPR = Math.max(1, Math.round(window.devicePixelRatio || 1));
+    (function setupHiDPI(){
+      const cssW = canvas.width;
+      const cssH = canvas.height;
+      canvas.style.width = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+      canvas.width = Math.floor(cssW * DPR);
+      canvas.height = Math.floor(cssH * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+    })();
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const GROUND = 90;
+    const PIPE_W = 64;
+    const GAP_BASE = 150;
+    const SPEED = 2.8;
+    const GRAVITY = 0.45;
+    const FLAP = -8.6;
+
+    let state = 'ready';
+    let score = 0;
+    let best = Number(localStorage.getItem('flybird_best')||0);
+    let pipes = [];
+    let bird = { x: 120, y: H*0.5, r: 22, vy: 0 };
+    let birdImg = null;
+    let lossImg = null;
+    let spriteMode = true;
+    let spriteScale = 1;
+    function hitRadius(){ return spriteMode && birdImg ? bird.r * (1.6 * spriteScale) : bird.r; }
+    let tPipe = 0;
+    let bgOffset = 0;
+    let last = performance.now();
+    let audioCtx = null;
+    let audioBuffer = null;
+    let audioMuted = false;
+    let overBuffer = null;
+
+    function reset() {
+      state = 'ready';
+      score = 0;
+      pipes = [];
+      bird = { x: 120, y: H*0.5, r: 16, vy: 0 };
+      tPipe = 0;
+      bgOffset = 0;
+      last = performance.now();
+    }
+
+    function start() { if (state !== 'play') state = 'play'; }
+
+    function flap() {
+      if (state === 'ready') { start(); if (!audioMuted) playFlap(); }
+      else if (state === 'play') { bird.vy = FLAP; if (!audioMuted) playFlap(); }
+      if (state === 'over') reset();
+    }
+
+    function spawnPipe() {
+      const difficulty = Math.min(0.45, score*0.02);
+      const gap = GAP_BASE - score*2;
+      const minGapTop = 60;
+      const maxGapTop = H - GROUND - gap - 60;
+      const gapTop = Math.max(minGapTop, Math.min(maxGapTop, Math.random()*(maxGapTop-minGapTop)+minGapTop));
+      pipes.push({ x: W+20, gapTop, gap, scored: false });
+    }
+
+    function collideRectCircle(rx, ry, rw, rh, cx, cy, cr) {
+      const nx = Math.max(rx, Math.min(cx, rx+rw));
+      const ny = Math.max(ry, Math.min(cy, ry+rh));
+      const dx = cx - nx;
+      const dy = cy - ny;
+      return dx*dx + dy*dy <= cr*cr;
+    }
+
+    function update(dt) {
+      if (state !== 'play') return;
+      bgOffset += SPEED*dt*0.06;
+      bird.vy += GRAVITY*dt*0.06;
+      bird.y += bird.vy;
+
+      tPipe += dt;
+      if (tPipe > 1300) { spawnPipe(); tPipe = 0; }
+
+      for (let i = pipes.length - 1; i >= 0; i--) {
+        const p = pipes[i];
+        p.x -= SPEED*dt*0.06*60/60;
+        if (!p.scored && p.x + PIPE_W < bird.x - hitRadius()) { p.scored = true; score++; if (!audioMuted) playScore(); if (score > best) { best = score; localStorage.setItem('flybird_best', String(best)); } }
+        if (p.x + PIPE_W < -20) pipes.splice(i,1);
+      }
+
+      const rHit = hitRadius();
+      const topHit = bird.y - rHit < 0;
+      const groundHit = bird.y + rHit > H - GROUND;
+      let pipeHit = false;
+      for (const p of pipes) {
+        if (collideRectCircle(p.x, 0, PIPE_W, p.gapTop, bird.x, bird.y, rHit)) { pipeHit = true; break; }
+        const bottomY = p.gapTop + p.gap;
+        if (collideRectCircle(p.x, bottomY, PIPE_W, H - GROUND - bottomY, bird.x, bird.y, rHit)) { pipeHit = true; break; }
+      }
+      if (topHit || groundHit || pipeHit) { if (state !== 'over') { state = 'over'; if (!audioMuted) playHit(); } }
+    }
+
+    function drawBackground() {
+      const skyGrad = ctx.createLinearGradient(0,0,0,H);
+      skyGrad.addColorStop(0,'#87ceeb');
+      skyGrad.addColorStop(1,'#b3ecff');
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#98ee99';
+      for (let i=0;i<12;i++) {
+        const x = ((i*80 - (bgOffset%80))+W)%W;
+        ctx.beginPath();
+        ctx.arc(x, H- GROUND - 24, 40, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#6d4c41';
+      ctx.fillRect(0,H-GROUND,W,GROUND);
+      ctx.fillStyle = '#8d6e63';
+      for (let i=0;i<W;i+=24) ctx.fillRect(i, H-GROUND, 12, 8);
+    }
+
+    function drawPipes() {
+      for (const p of pipes) {
+        ctx.fillStyle = '#43a047';
+        ctx.fillRect(p.x, 0, PIPE_W, p.gapTop);
+        ctx.fillRect(p.x, p.gapTop-20, PIPE_W, 20);
+        const bottomY = p.gapTop + p.gap;
+        ctx.fillRect(p.x, bottomY, PIPE_W, H - GROUND - bottomY);
+        ctx.fillRect(p.x, bottomY, PIPE_W, 20);
+      }
+    }
+
+    function drawBird() {
+      ctx.save();
+      ctx.translate(bird.x, bird.y);
+      ctx.rotate(Math.max(-0.5, Math.min(0.5, bird.vy*0.06)));
+      if (birdImg && spriteMode) {
+        const iw = birdImg.width || 1, ih = birdImg.height || 1;
+        const boxH = bird.r * 3.2 * spriteScale;
+        const boxW = boxH * (iw/ih);
+        ctx.shadowColor = 'rgba(0,0,0,.25)';
+        ctx.shadowBlur = 8;
+        ctx.drawImage(birdImg, -boxW/2, -boxH/2, boxW, boxH);
+      } else if (birdImg) {
+        ctx.beginPath();
+        ctx.arc(0,0,bird.r,0,Math.PI*2);
+        ctx.clip();
+        ctx.drawImage(birdImg, -bird.r, -bird.r, bird.r*2, bird.r*2);
+      } else {
+        ctx.fillStyle = '#fdd835';
+        ctx.beginPath();
+        ctx.arc(0,0,bird.r,0,Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(6,-4,6,0,Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(8,-4,2.3,0,Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#ef6c00';
+        ctx.beginPath();
+        ctx.moveTo(bird.r-2,2);
+        ctx.lineTo(bird.r+12,6);
+        ctx.lineTo(bird.r-2,10);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawText(text, y, size, color) {
+      ctx.fillStyle = color;
+      ctx.font = `bold ${size}px system-ui`;
+      ctx.textAlign = 'center';
+      ctx.fillText(text, W/2, y);
+    }
+
+    function drawHUD() {
+      ctx.fillStyle = 'rgba(0,0,0,.15)';
+      ctx.fillRect(12,12,96,48);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 20px system-ui';
+      ctx.textAlign = 'left';
+      ctx.fillText(`Score: ${score}`, 20, 38);
+      ctx.fillText(`Best: ${best}`, 20, 58);
+    }
+
+    function render() {
+      ctx.clearRect(0,0,W,H);
+      drawBackground();
+      drawPipes();
+      drawBird();
+      drawHUD();
+      if (state === 'ready') {
+        drawText('Flying Pritu', 200, 48, '#044');
+        drawText('Tap/Click/Space to start', 260, 20, '#055');
+      }
+      if (state === 'over') {
+        if (lossImg) {
+          const iw = lossImg.width || 1, ih = lossImg.height || 1;
+          const scale = Math.min(W/iw, H/ih);
+          const dw = iw*scale, dh = ih*scale;
+          const dx = (W - dw)/2, dy = (H - dh)/2;
+          ctx.drawImage(lossImg, dx, dy, dw, dh);
+        } else {
+          drawText('Game Over', 220, 44, '#b71c1c');
+        }
+        drawText('Enter to restart', H - 40, 20, '#333');
+      }
+    }
+
+    function loop(now) {
+      const dt = now - last; last = now;
+      update(dt);
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    function onKey(e) {
+      if (e.code === 'Space') flap();
+      if (e.code === 'Enter' && state === 'over') reset();
+      if (audioCtx) audioCtx.resume();
+    }
+
+    function onPress() { if (audioCtx) audioCtx.resume(); flap(); }
+
+    function ensureCtx() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    function playOsc(freq, dur, type) { ensureCtx(); const ctx = audioCtx; const o = ctx.createOscillator(); const g = ctx.createGain(); o.type = type || 'sine'; o.frequency.value = freq; g.gain.value = 0.2; o.connect(g); g.connect(ctx.destination); const t = ctx.currentTime; o.start(t); g.gain.setValueAtTime(0.2,t); g.gain.exponentialRampToValueAtTime(0.0001, t+dur); o.stop(t+dur); }
+    function playBuffer() { ensureCtx(); if (!audioBuffer) return; const ctx = audioCtx; const src = ctx.createBufferSource(); const g = ctx.createGain(); g.gain.value = 0.35; src.buffer = audioBuffer; src.connect(g); g.connect(ctx.destination); src.start(); }
+    function playFlap() { if (audioMuted) return; if (audioBuffer) playBuffer(); else playOsc(600,0.09,'square'); }
+    function playScore() { if (audioMuted) return; playOsc(880,0.1,'triangle'); }
+    function playHit() { if (audioMuted) return; if (overBuffer) { ensureCtx(); const ctx = audioCtx; const src = ctx.createBufferSource(); const g = ctx.createGain(); g.gain.value = 0.5; src.buffer = overBuffer; src.connect(g); g.connect(ctx.destination); src.start(); } else { playOsc(140,0.28,'sawtooth'); } }
+
+    function setBirdFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const data = reader.result;
+        if (typeof data === 'string') {
+          try { localStorage.setItem('flybird_photo', data); } catch {}
+        }
+        const img = new Image();
+        img.onload = () => { birdImg = img; };
+        img.src = data;
+      };
+      reader.readAsDataURL(file);
+    }
+    function loadBirdFrom(url) { const img = new Image(); img.onload = () => { birdImg = img; }; img.src = url; }
+
+    function loadLossFrom(url) { const img = new Image(); img.onload = () => { lossImg = img; }; img.src = url; }
+    function setLossFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const data = reader.result;
+        if (typeof data === 'string') { try { localStorage.setItem('flybird_loss', data); } catch {} }
+        loadLossFrom(data);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function dataURLToArrayBuffer(url) { const base64 = url.split(',')[1]; const bin = atob(base64); const len = bin.length; const bytes = new Uint8Array(len); for (let i=0;i<len;i++) bytes[i] = bin.charCodeAt(i); return bytes.buffer; }
+    function setSoundFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const data = reader.result;
+        if (typeof data === 'string') { try { localStorage.setItem('flybird_sound', data); } catch {} }
+        ensureCtx(); const ab = dataURLToArrayBuffer(data); audioCtx.decodeAudioData(ab.slice(0), b => { audioBuffer = b; });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function tryLoadSound(url) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const ab = await res.arrayBuffer();
+        ensureCtx();
+        return await new Promise(resolve => audioCtx.decodeAudioData(ab.slice(0), b => { audioBuffer = b; resolve(url); }, () => resolve(null)));
+      } catch { return null; }
+    }
+    function loadSoundFrom(url) { ensureCtx(); fetch(url).then(r=>r.arrayBuffer()).then(ab=>audioCtx.decodeAudioData(ab.slice(0), b=>{ audioBuffer=b; })); }
+    async function tryLoadOverSound(url) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const ab = await res.arrayBuffer();
+        ensureCtx();
+        return await new Promise(resolve => audioCtx.decodeAudioData(ab.slice(0), b => { overBuffer = b; resolve(url); }, () => resolve(null)));
+      } catch { return null; }
+    }
+
+    
+
+    canvas.addEventListener('dragover', e => { e.preventDefault(); });
+    canvas.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (!f) return; if (f.type.startsWith('image/')) { setBirdFile(f); } else if (f.type.startsWith('audio/')) setSoundFile(f); });
+    window.addEventListener('paste', e => { const items = e.clipboardData && e.clipboardData.items; if (!items) return; for (const it of items) { if (it.type.startsWith('image/')) { const f = it.getAsFile(); setBirdFile(f); break; } } });
+
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onPress);
+    window.addEventListener('touchstart', onPress, { passive: true });
+
+    (function(){
+      const tryLoad = (src) => new Promise(res => { const img = new Image(); img.onload = () => res(src); img.onerror = () => res(null); img.src = src; });
+      (async () => {
+        const file1 = await tryLoad('bird.png');
+        const file2 = file1 || await tryLoad('bird.jpg');
+        if (file2) {
+          loadBirdFrom(file2);
+        } else {
+          const stored = localStorage.getItem('flybird_photo');
+          if (stored) loadBirdFrom(stored);
+        }
+      })();
+      const tryLoad2 = (src) => new Promise(res => { const img = new Image(); img.onload = () => res(src); img.onerror = () => res(null); img.src = src; });
+      (async () => {
+        const candidates = ['loss.png','loss.jpg','eliminated.png','eliminated.jpg','gameover.png','gameover.jpg'];
+        let chosen = null;
+        for (const name of candidates) { if (!chosen) { chosen = await tryLoad2(name); } }
+        if (chosen) { loadLossFrom(chosen); }
+        else { const li = localStorage.getItem('flybird_loss'); if (li) loadLossFrom(li); }
+      })();
+      const s = localStorage.getItem('flybird_sound');
+      if (s) { ensureCtx(); const ab = dataURLToArrayBuffer(s); audioCtx.decodeAudioData(ab.slice(0), b => { audioBuffer = b; }); }
+      if (!audioBuffer) {
+        (async () => {
+          const tap = await tryLoadSound('tap audio.mp3');
+          if (!tap) { await tryLoadSound('flap.mp3') || await tryLoadSound('flap.wav'); }
+        })();
+      }
+      if (!overBuffer) {
+        (async () => {
+          const loss = await tryLoadOverSound('loss audio.mp3');
+          if (!loss) { await tryLoadOverSound('gameover.mp3') || await tryLoadOverSound('gameover.wav'); }
+        })();
+      }
+      const sm = localStorage.getItem('flybird_sprite');
+      if (sm) { spriteMode = sm === '1'; }
+      const ss = localStorage.getItem('flybird_sprite_scale');
+      if (ss) { spriteScale = Number(ss)||1; }
+    })();
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
+    function hitRadius(){ return spriteMode && birdImg ? bird.r * (1.6 * spriteScale) : bird.r; }

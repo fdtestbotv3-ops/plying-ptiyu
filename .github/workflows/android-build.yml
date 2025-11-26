@@ -34,7 +34,7 @@ jobs:
       - name: Setup Capacitor project
         run: |
           npm init -y
-          npm i @capacitor/core @capacitor/cli --save-exact
+          npm i @capacitor/core @capacitor/cli @capacitor/android --save-exact
           npx cap init "Flying Pritu" com.fdtestbotv3ops.flyingpritu --web-dir=.
           npx cap add android
           npx cap copy
